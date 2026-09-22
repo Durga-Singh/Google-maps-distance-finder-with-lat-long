@@ -1,0 +1,9 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.xlsx
+!sample_input.xlsx
+report*.csv
+report*.xlsx
