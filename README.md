@@ -1,92 +1,69 @@
-# Branch Pin Audit
+# Business Profile Batch Updater
 
-Compares branch coordinates from your spreadsheet against what Google
-currently has for that listing, flags any pin that has drifted past a
-threshold you set, and writes a report with a ready-to-open Google Maps
-link for every flagged branch.
+A Chrome and Brave extension for updating Google Business Profile locations from Excel. It handles business names, address fields and map pins, then exports the results back to Excel.
 
-## Why
+Current extension version: **6.0.15**.
 
-Dragging a pin in Google Business Profile can't be done from lat/long —
-it's drag-only, and there's no bulk API for repositioning a listing that
-already exists (see notes at the bottom). This script doesn't move pins
-for you; it does the tedious part — figuring out *which* of hundreds of
-branches actually need a manual fix — so your team only drags pins that
-are genuinely wrong.
+## What it does
 
-## Setup
+- Searches listings by store code and processes eligible profiles sharing that code.
+- Updates name, address, city, PIN code, state and coordinates in that order.
+- Runs up to 20 separate windows.
+- Checks saved coordinates, names and address fields after refreshing.
+- Saves progress so a run can resume after closing the browser.
 
-1. **Get a Google Maps API key**
-   - Go to the [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
-   - Create (or pick) a project, enable the **Places API**
-   - Create an API key, and ideally restrict it to the Places API
-   - Note: this is billed per request after a free monthly quota — check
-     [current Places API pricing](https://developers.google.com/maps/documentation/places/web-service/usage-and-billing)
-     before running it against a large sheet.
+## Install
 
-2. **Clone this repo and install dependencies**
-   ```bash
-   git clone <your-repo-url>
-   cd branch-pin-audit
-   python -m venv venv
-   source venv/bin/activate   # Windows: venv\Scripts\activate
-   pip install -r requirements.txt
-   ```
+1. Download this branch as a ZIP and extract it.
+2. Open `brave://extensions` or `chrome://extensions`.
+3. Enable Developer mode, select **Load unpacked**, and choose the `extension` folder.
+4. Open your Google Business Profile Manager store list in the correct account and group.
+5. Open the extension, load your Excel file and choose a run option.
 
-3. **Add your API key**
-   ```bash
-   cp .env.example .env
-   # then edit .env and paste your key
-   ```
+For parallel coordinate updates, close the browser and use the matching Windows launcher in `extension`. Start with a small batch and a low window count. Keep worker windows open.
 
-## Usage
+## Pause and resume
 
-```bash
-python audit.py --input branches.xlsx --output report.xlsx --threshold 20
+**Pause after current store** lets the current stores finish. **Stop at current ATM** pauses immediately.
+
+After reopening the browser, open Business Manager and click **Resume saved run (one store back)** in the extension. Each unfinished window restores its assignment and checks the previous store before continuing. No Excel re-import is needed.
+
+Interrupted saves are checked before work continues. If the saved values cannot be read reliably, that window stops with a message instead of assuming success.
+
+Keep the same browser profile and extension installation. Removing the extension, clearing its data or importing a new queue discards the saved resume plan. Resume checkpoints are available for runs started on version 6.0.15 or later.
+
+## Reading the results
+
+The export includes saved latitude and longitude, distance from the requested pin, field checks and notes.
+
+- **OK:** the saved coordinate reading is within 5 metres of the spreadsheet value.
+- **Mismatch:** the reading is farther than 5 metres.
+- **Unconfirmed:** the extension could not obtain a reliable saved reading.
+
+These checks read the saved Business Manager preview. They do not prove that a pending change has appeared on public Google Maps.
+
+## Address handling
+
+The extension maps NCT of Delhi to Delhi and clears unused address lines. If Google returns the specific “more than 5 items” error, it first tries the full address without commas across up to five lines, each under 80 characters. Shortening is a last resort after that retry is rejected with the same error; removed text is recorded in the notes.
+
+## Tests
+
+Run from the repository root with Node.js:
+
+```sh
+node extension/tests/coordinate-readback.cjs
+node extension/tests/resume.cjs
 ```
 
-- `--input` — CSV or XLSX with columns `branch_code`, `branch_name`,
-  `excel_lat`, `excel_long`, and optionally `address` and `place_id`
-  (see `sample_input.csv` for the exact format).
-- `--output` — where to write the report (CSV or XLSX).
-- `--threshold` — meters of drift allowed before a branch is flagged
-  (default 20; GPS noise is typically under 5m, so 15–20m is a
-  reasonable starting cutoff — tune it to what your team considers a
-  meaningful mismatch).
-- `--api-key` — optional, overrides the `.env` value.
-- `--delay` — seconds between requests (default 0.05), raise this if you
-  hit rate-limit errors.
+The tests cover coordinate readback guards and simulated restart recovery. A browser shutdown during a live production run has not been tested. Google UI changes can affect the automation.
 
-Try it on the bundled sample first:
-```bash
+## Earlier Python audit script
+
+The original `audit.py` remains in the repository. It compares spreadsheet coordinates with Google Places results and writes a distance report. It is separate from the browser extension and requires a Google Maps API key.
+
+```sh
+pip install -r requirements.txt
 python audit.py --input sample_input.csv --output sample_report.csv
 ```
 
-## Output columns
-
-| Column | Meaning |
-|---|---|
-| `current_lat` / `current_lng` | What Google has right now |
-| `distance_m` | Distance between your coordinate and Google's, in meters |
-| `status` | `OK`, `NEEDS CORRECTION`, or `NOT FOUND` |
-| `maps_link` | `google.com/maps?q=lat,long` — only filled for flagged rows, so the field team can open it and drag the pin to match |
-| `match_confidence` | `place_id` (most reliable — you supplied it), `text_search` (matched by name/address), or `not_found` |
-
-**Tip:** if you have Place IDs for your branches (e.g. from Google
-Business Profile exports), include them — matching by `place_id` is far
-more reliable than a name/address text search, which can occasionally
-match the wrong branch of the same bank in the same city.
-
-## Known limitations
-
-- **This does not move pins.** There's no supported way to reposition a
-  pin on an *existing* Google Business Profile listing via API — Google
-  restricts that `latlng` field to approved partner integrations. Manual
-  correction (drag the pin in Business Profile → Adjust) is still
-  required for anything flagged.
-- **Text search can mismatch** for branches with generic names in dense
-  areas — always double-check `match_confidence: text_search` results
-  before treating "NEEDS CORRECTION" as final, or supply `place_id`
-  where you have it.
-- **Rate limits / cost** scale with the number of rows — batch large
-  sheets and monitor usage in the Cloud Console.
+Use `.env.example` for its configuration and `python audit.py --help` for options. The extension itself does not require a paid API key.
