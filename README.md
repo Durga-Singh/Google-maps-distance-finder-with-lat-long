@@ -4,7 +4,7 @@ Bulk update Google Business Profile names, addresses and map pins from Excel usi
 
 Built for teams maintaining multiple branches, shops or ATMs. The browser extension works through Business Profile Manager and does not require a paid Google Maps API key.
 
-Current extension version: **6.0.15**.
+Current extension version: **6.0.16**.
 
 [Download source ZIP](https://github.com/Durga-Singh/business-profile-batch-updater/archive/refs/heads/main.zip) · [Installation](#install-in-chrome-or-brave) · [Excel columns](#prepare-your-excel-file) · [Pause and resume](#pause-and-resume) · [Report a problem](https://github.com/Durga-Singh/business-profile-batch-updater/issues)
 
@@ -14,7 +14,7 @@ This project is independently maintained and is not affiliated with Google.
 
 - Searches listings by store code and processes eligible profiles sharing that code.
 - Updates name, address, city, PIN code, state and coordinates in that order.
-- Runs up to 20 separate windows.
+- Runs up to 20 workers in one window with multiple tabs, or in separate windows.
 - Checks saved coordinates, names and address fields after refreshing.
 - Saves progress so a run can resume after closing the browser.
 
@@ -29,6 +29,16 @@ You need a desktop browser and access to manage the Business Profiles you want t
 5. Open the extension, load your Excel file and choose a run option.
 
 For parallel coordinate updates, close the browser and use the matching Windows launcher in `extension`. Start with a small batch and a low window count. Keep worker windows open.
+
+## One window, multiple tabs
+
+Version 6.0.16 adds **Layout → One window, multiple tabs**. Each worker gets its own tab in a dedicated automation window. Searches and page reads can overlap. Physical typing, map placement through Save, and saved-pin verification take turns in the active tab. This is partial parallel processing, not simultaneous map dragging.
+
+Start with 2–4 workers. Keep the worker window open and avoid switching its tabs during active input. Use another window for your own browsing. Completed workers close only their own tabs. Paused or failed tabs remain open for inspection.
+
+Saved-run recovery remembers the layout and restores worker assignments. Older saved runs without a layout keep separate-window mode. To try tabs with an older queue, start a new run after resolving any interrupted-save flags.
+
+The separate-window option remains available. Tab ownership, error cleanup and resume layout are covered by automated tests; live Google Business tab-mode behavior has not yet been validated. The same number of loaded pages can still use substantial RAM.
 
 ## Prepare your Excel file
 
@@ -54,18 +64,18 @@ The extension's coordinate validation currently targets locations in India. It i
 1. Open the correct account and location group in Business Profile Manager.
 2. Import the spreadsheet into the extension.
 3. Choose whether to update names and address details along with coordinates, or update coordinates and check the other fields.
-4. Start with one window and a few stores. Inspect the exported results before increasing the batch size.
+4. Start with one worker and a few stores. Inspect the exported results before increasing the batch size.
 5. Use **Re-check all ATMs (read-only)** to check saved values without submitting another update.
 
-Up to 20 worker windows are supported, but the practical limit depends on available memory and how quickly Google loads. A higher window count does not guarantee a faster run.
+Up to 20 workers are supported in either layout, but the practical limit depends on available memory and how quickly Google loads. A higher worker count does not guarantee a faster run.
 
 ## Pause and resume
 
 **Pause after current store** lets the current stores finish. **Stop at current ATM** pauses immediately.
 
-After reopening the browser, open Business Manager and click **Resume saved run (one store back)** in the extension. Each unfinished window restores its assignment and checks the previous store before continuing. No Excel re-import is needed.
+After reopening the browser, open Business Manager and click **Resume saved run (one store back)** in the extension. Each unfinished worker restores its assignment and checks the previous store before continuing. No Excel re-import is needed.
 
-Interrupted saves are checked before work continues. If the saved values cannot be read reliably, that window stops with a message instead of assuming success.
+Interrupted saves are checked before work continues. If the saved values cannot be read reliably, that worker stops with a message instead of assuming success.
 
 Keep the same browser profile and extension installation. Removing the extension, clearing its data or importing a new queue discards the saved resume plan. Resume checkpoints are available for runs started on version 6.0.15 or later.
 
@@ -107,7 +117,7 @@ The extension could not read a reliable saved coordinate value, or it could not 
 
 ## Reporting problems
 
-[Open an issue](https://github.com/Durga-Singh/business-profile-batch-updater/issues) with the extension version, browser, number of worker windows, operation being run and exact error message. Include a small anonymized example if the issue depends on spreadsheet columns.
+[Open an issue](https://github.com/Durga-Singh/business-profile-batch-updater/issues) with the extension version, browser, layout, number of workers, operation being run and exact error message. Include a small anonymized example if the issue depends on spreadsheet columns.
 
 Remove account details, private store data and customer information from screenshots and spreadsheets before posting them in this public repository.
 
@@ -118,9 +128,10 @@ Run from the repository root with Node.js:
 ```sh
 node extension/tests/coordinate-readback.cjs
 node extension/tests/resume.cjs
+node extension/tests/tab-workers.cjs
 ```
 
-The tests cover coordinate readback guards and simulated restart recovery. A browser shutdown during a live production run has not been tested. Google UI changes can affect the automation.
+The tests cover coordinate readback guards, shared-tab ownership and cleanup, and simulated restart recovery. A browser shutdown during a live production run has not been tested. Google UI changes can affect the automation.
 
 ## Earlier Python audit script
 

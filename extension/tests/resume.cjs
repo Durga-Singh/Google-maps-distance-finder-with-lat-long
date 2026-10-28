@@ -11,7 +11,7 @@ const storage=obj=>({get:async k=>k==null?structuredClone(obj):Object.fromEntrie
 const event={addListener(){},removeListener(){}};
 function context(){
  const chrome={storage:{local:storage(local),session:storage(session)},runtime:{getURL:x=>'ext://'+x,onMessage:event},action:{onClicked:event},debugger:{onDetach:event},tabs:{onActivated:event}};
- const c={chrome,structuredClone,console,RunPolicy:require('../runpolicy.js'),ResumePlan:P,importScripts(){},createEngine:api=>({
+ const c={chrome,structuredClone,console,RunPolicy:require('../runpolicy.js'),ResumePlan:P,createTabWorkers:()=>({enabled:true}),importScripts(){},createEngine:api=>({
  findBusinessTab:async()=>123,state:()=>({}),dispose(){},
  runChecks:async(tab,from,target,end)=>{calls.push(['check',from,end]);if(end==null) await api.storage.local.set({runCheckpoint:{complete:true}});else await api.storage.local.set({runCheckpoint:{phase:'check',index:from}});},
  runBatch:async(tab,opts)=>{calls.push(['update',opts.startIndex]);await api.storage.local.set({runCheckpoint:{complete:true}});}
@@ -26,9 +26,9 @@ function context(){
  assert.deepEqual(calls,[['check',0,2],['update',0]]);
  assert.equal(local.savedRun.workers[0].checkpoint.complete,true);
  assert.equal(local.savedRun.workers[1].checkpoint.complete,true);
- calls=[];local.savedRun.workers[1].checkpoint={phase:'check',index:1};c=context();await vm.runInContext("start({action:'resumeSaved'}, {})",c);
+ calls=[];local.savedRun.layout='tabs';local.savedRun.workers[1].checkpoint={phase:'check',index:1};c=context();await vm.runInContext("start({action:'resumeSaved'}, {})",c);
  for(let i=0;i<20;i++) await new Promise(setImmediate);
- assert.deepEqual(calls,[['check',0,undefined]]);
+ assert.deepEqual(calls,[['check',0,undefined]]);assert.equal(vm.runInContext('runLayout',c),'tabs');assert.equal(vm.runInContext('tabWorkers.enabled',c),true);
  local.savedRun.workers[1].checkpoint=null;local.batchRows[0].store='changed';c=context();await assert.rejects(()=>vm.runInContext("start({action:'resumeSaved'}, {})",c),/Queue changed/);
  console.log('PASS: restart restores assignments, skips completed workers, overlaps one store, preserves check phase, rejects changed queues, safely reconciles interrupted saves.');
 })().catch(e=>{console.error(e);process.exitCode=1;});

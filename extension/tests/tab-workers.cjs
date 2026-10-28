@@ -1,0 +1,21 @@
+const assert=require('node:assert/strict');
+const create=require('../tab-workers.js');
+(async()=>{
+ let windows=0,next=1,active=null,events=[],closed=[];
+ const tabs=new Map();
+ const api={windows:{create:async()=>{windows++;const tab={id:next++,windowId:10};tabs.set(tab.id,tab);return {id:10,tabs:[tab]};},get:async()=>({id:10,state:'normal'}),update:async()=>{}},tabs:{create:async opts=>{assert.equal(opts.active,false);const tab={id:next++,windowId:opts.windowId};tabs.set(tab.id,tab);return tab;},get:async id=>{if(!tabs.has(id))throw Error('closed');return tabs.get(id);},update:async(id)=>{active=id;},remove:async id=>{closed.push(id);tabs.delete(id);}}};
+ const manager=create(api);
+ const opened=await Promise.all([manager.open('url'),manager.open('url'),manager.open('url')]);
+ assert.equal(windows,1);assert.deepEqual(opened.map(w=>w.tabs[0].id),[1,2,3]);
+ let release;const blocked=new Promise(r=>release=r);
+ const first=manager.run(1,async()=>{assert.equal(active,1);events.push('map-start');await manager.run(1,async()=>events.push('nested-input'));await blocked;assert.equal(active,1);events.push('save-finished');});
+ const second=manager.run(2,async()=>{assert.equal(active,2);events.push('next-map');});
+ await new Promise(setImmediate);assert.deepEqual(events,['map-start','nested-input']);release();await Promise.all([first,second]);
+ assert.deepEqual(events,['map-start','nested-input','save-finished','next-map']);assert.equal(manager.owns(2),false);
+ await assert.rejects(manager.run(1,async()=>{throw Error('save failed');}),/save failed/);
+ await manager.run(3,async()=>assert.equal(active,3));
+ await manager.close(1);assert.deepEqual(closed,[1]);assert.ok(tabs.has(2));assert.ok(tabs.has(3));
+ await assert.rejects(manager.run(1,async()=>assert.fail('closed tab ran')),/no longer available/);
+ await manager.run(2,async()=>assert.equal(active,2));
+ console.log('PASS: one shared window, inactive tab creation, FIFO map/save ownership, nested input, failure release and per-tab cleanup.');
+})().catch(e=>{console.error(e);process.exitCode=1;});
