@@ -1,6 +1,18 @@
 // Each invocation owns all mutable automation state.
 function createEngine(chrome) {
 let STORE = '';
+const sharedTabs=chrome.workerTabs;
+const needsActive=tabId=>!sharedTabs?.enabled || sharedTabs.owns(tabId);
+async function withActive(tabId,fn) {
+  if(!sharedTabs?.enabled || sharedTabs.owns(tabId)) return fn();
+  await runGate();
+  const queuedAt=runNow();
+  return sharedTabs.run(tabId,async()=>{
+    pausedDuration+=runNow()-queuedAt;
+    await runGate();
+    return fn();
+  });
+}
 let IDX = 0; // which of several businesses sharing this store code is being handled
 
 let GEO = {};
@@ -24,7 +36,7 @@ async function runGate() {
   if(!running || activeRunTab===null) return;
   const tab=await chrome.tabs.get(activeRunTab);
   await restoreWorkerWindow(tab.windowId);
-  if(!tab.active) await suspendRun('Paused because you changed tabs');
+  if(!tab.active && needsActive(tab.id)) await suspendRun('Paused because you changed tabs');
   // All pending work waits here, preserving the current row, target and operation.
   while(suspended && !cancelRequested) await new Promise(resolve=>resumeWaiters.push(resolve));
   if(cancelRequested) throw new Error('Run interrupted. Resume from the saved business.');
@@ -33,7 +45,7 @@ async function resumeRun() {
   if(!running) throw new Error('This run is no longer active. Use the dashboard to resume the saved business.');
   const tab=await chrome.tabs.get(activeRunTab);
   // The run lives in its own background window, so only the tab itself must still be the active tab of that window.
-  if(!tab.active) throw new Error('Return to the Business Manager tab in the background window, then press Start.');
+  if(!tab.active && needsActive(tab.id)) throw new Error('Return to the Business Manager tab in the background window, then press Start.');
   pausedDuration+=Date.now()-pausedAt;suspended=false;
   await chrome.storage.session.set({runSuspended:false,status:'Resuming '+(STORE||'current business')+' from the stopped step…'});
   resumeWaiters.splice(0).forEach(resolve=>resolve());
@@ -57,7 +69,8 @@ async function closeRunWindowIfDone() {
   const {runWindow}=await chrome.storage.session.get('runWindow');
   if(!runWindow) return;
   await chrome.storage.session.remove('runWindow');
-  try {await chrome.windows.remove(runWindow.windowId);} catch {}
+  if(sharedTabs?.enabled) await sharedTabs.close(runWindow.tabId);
+  else try {await chrome.windows.remove(runWindow.windowId);} catch {}
 }
 async function finishControl() {
   suspended=false;activeRunTab=null;activeRunWindow=null;
@@ -633,11 +646,14 @@ async function importRows(incoming) {
 async function ensureForeground(tabId) {
   const tab=await chrome.tabs.get(tabId);
   if(new URL(tab.url).hostname!=='business.google.com') throw new Error('Return to the Business Manager page.');
-  if(!tab.active) await suspendRun('Paused because you changed tabs');
+  if(!tab.active && needsActive(tab.id)) await suspendRun('Paused because you changed tabs');
   await runGate();
 }
 
 async function openMatchedEditor(tabId) {
+  return withActive(tabId,()=>openMatchedEditorActive(tabId));
+}
+async function openMatchedEditorActive(tabId) {
   await guard(tabId);await ensureForeground(tabId);
   // The pencil is in the top-level results table: use a real browser mouse
   // click at the freshly measured exact row control, not a synthetic DOM click.
@@ -659,8 +675,10 @@ async function searchStore(tabId) {
   await chrome.storage.session.remove(['matched','positioned']);
   IDX=0;
   if((await top(tabId,'search')).count!==1) throw new Error('Open the business list with its Search businesses box.');
-  await top(tabId,'search',true);
-  for(const type of ['keyDown','keyUp']) await debugCommand({tabId},'Input.dispatchKeyEvent',{type,key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
+  await withActive(tabId,async()=>{
+    await top(tabId,'search',true);
+    for(const type of ['keyDown','keyUp']) await debugCommand({tabId},'Input.dispatchKeyEvent',{type,key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
+  });
   let identity,prev=-1;
   for(let i=0;i<30;i++) {
     if(cancelRequested) throw new Error('Stopped.');
@@ -789,6 +807,9 @@ async function nudge(tabId,calibration) {
 }
 // Cancel any half-finished edit (Cancel / Escape / "discard changes?" confirmation). True when no Save/Done control is left.
 async function discardEdits(tabId) {
+  return withActive(tabId,()=>discardEditsActive(tabId));
+}
+async function discardEditsActive(tabId) {
   for(let i=0;i<3;i++) {
     if(!await candidates(tabId,'save') && !await candidates(tabId,'done')) return true;
     if(!await click(tabId,'cancel',1500)) {
@@ -800,6 +821,9 @@ async function discardEdits(tabId) {
   return !await candidates(tabId,'save') && !await candidates(tabId,'done');
 }
 async function closeEditor(tabId) {
+  return withActive(tabId,()=>closeEditorActive(tabId));
+}
+async function closeEditorActive(tabId) {
   if(await candidates(tabId,'save') || await candidates(tabId,'done')) {
     if(!await discardEdits(tabId)) throw new Error('Editor still has unsaved controls that could not be cancelled.');
   }
@@ -866,6 +890,9 @@ async function pointOf(tabId,kind) { // {frameId, point} of the single matching 
   return point?{frameId:hit[0].frameId,point}:null;
 }
 async function realClick(tabId,frameId,point) {
+  return withActive(tabId,()=>realClickActive(tabId,frameId,point));
+}
+async function realClickActive(tabId,frameId,point) {
   let p=point;
   if(frameId!==0) { // translate frame coordinates to the top page
     const token=crypto.randomUUID();
@@ -887,12 +914,18 @@ async function realClick(tabId,frameId,point) {
   return true;
 }
 async function pressNamePencilReal(tabId) {
+  return withActive(tabId,()=>pressNamePencilRealActive(tabId));
+}
+async function pressNamePencilRealActive(tabId) {
   const p=await pointOf(tabId,'namePencil');
   if(!p || !await realClick(tabId,p.frameId,p.point)) return false;
   await wait(900);return true;
 }
 // Click into a field, select everything and type the value like a person would (value '' = just clear it).
 async function typeField(tabId,key,value) {
+  return withActive(tabId,()=>typeFieldActive(tabId,key,value));
+}
+async function typeFieldActive(tabId,key,value) {
   const p=await pointOf(tabId,'field:'+key);
   if(!p) return {ok:false,reason:'field not found'};
   if(!await realClick(tabId,p.frameId,p.point)) return {ok:false,reason:'could not click into the field'};
@@ -1320,6 +1353,7 @@ async function processTarget(tabId,rows,index,t,exp,opts,ctx) {
   }
 
   if(doCoords) {
+    await withActive(tabId,async()=>{
     await tell(`${STORE}: step 6/6 — coordinates ${row.latitude}, ${row.longitude}…`);
     if(!editClicked && !await candidates(tabId,'adjust')) {
       await click(tabId,'location',5000);editClicked=await openLocationFields(tabId);
@@ -1348,6 +1382,7 @@ async function processTarget(tabId,rows,index,t,exp,opts,ctx) {
     tg.coordinates={status:'unconfirmed',note:'Pin submitted; saved coordinates have not yet been read after refresh.'};
     await wait(3000);
     await setRow(rows,index,'processing',{messages:r.messages,error:''}); // the row becomes 'submitted' once every business is done
+    });
   }
   // Finish submission now. The later check pass must never requeue a saved target.
   if(doDetails) {tg.detailsDone=RunPolicy.detailsSubmitted(tg);tg.extraAddressChecked=tg.detailsDone;}
@@ -1388,6 +1423,9 @@ function expectedValues(row,tg) {
   return list.map(([key,v,opts])=>({key,want:String(v??'').trim(),opts,empty:/^address\d+$/.test(key) && !String(v??'').trim()}));
 }
 async function verifyTarget(tabId,row,t,exp,fresh,uiIndex=t) {
+  return withActive(tabId,()=>verifyTargetActive(tabId,row,t,exp,fresh,uiIndex));
+}
+async function verifyTargetActive(tabId,row,t,exp,fresh,uiIndex=t) {
   const tg=row.targets[t];
   tg.verify={};
   let opened=false;
@@ -1701,7 +1739,7 @@ async function findBusinessTab(callerWindowId) {
   }
   if(!source) throw new Error('Open your Business Manager store list in this Brave profile, select the Google account and business group containing your stores, then start again. The public Create your profile page cannot be used.');
   const url=source.url;
-  const win=await chrome.windows.create({url,type:'normal',state:'normal',focused:false,width:1280,height:900});
+  const win=sharedTabs?.enabled?await sharedTabs.open(url):await chrome.windows.create({url,type:'normal',state:'normal',focused:false,width:1280,height:900});
   const tab=win.tabs?.[0];
   if(!tab) throw new Error('Chrome did not open the background window.');
   await restoreWorkerWindow(win.id);
@@ -1807,7 +1845,7 @@ chrome.debugger.onDetach.addListener(async source=>{
 });
 
 chrome.tabs.onActivated?.addListener(info=>{
-  if(running && activeRunTab!==null && info.windowId===activeRunWindow && info.tabId!==activeRunTab)
+  if(running && activeRunTab!==null && info.windowId===activeRunWindow && info.tabId!==activeRunTab && needsActive(activeRunTab))
     void suspendRun('Paused because you changed tabs');
 });
 // Window focus is deliberately NOT watched any more: the run is meant to continue while you use other windows.

@@ -33,10 +33,11 @@ async function refresh() {
   const s = await chrome.storage.session.get(['status', 'batchRunning', 'mode', 'runSuspended', 'workers']);
   busy = !!s.batchRunning;
   $('concurrency').disabled=busy;
+  $('layout').disabled=busy;
   const resumable=savedRun?.workers?.filter(w=>!w.checkpoint?.complete)||[];
   $('resumeSaved').disabled=busy || !resumable.length || !batchRows.length;
   $('resumeInfo').textContent=resumable.length?'Saved run available: '+resumable.length+' unfinished window(s). Resume restores their original assignments and rechecks one previous store per window. No Excel re-import needed.':'';
-  $('workers').replaceChildren(...(s.workers||[]).map(w=>{const li=document.createElement('li');li.textContent=`Window ${w.id}${w.done?' (finished/stopped)':w.paused?' (paused)':''}: ${w.status}`;return li;}));
+  $('workers').replaceChildren(...(s.workers||[]).map(w=>{const li=document.createElement('li');li.textContent=`${w.layout==='tabs'?'Tab':'Window'} ${w.id}${w.done?' (finished/stopped)':w.paused?' (paused)':''}: ${w.status}`;return li;}));
   $('status').textContent = s.status || (batchRows.length ? `${batchRows.length} stores in the queue.` : 'Ready. Load your sheet first.');
   for (const id of ['startRun', 'startCheck']) $(id).disabled = busy || !batchRows.length;
   for (const id of ['import', 'clear', 'clearChecks']) if (id !== 'import') $(id).disabled = busy;
@@ -124,10 +125,10 @@ $('startRun').onclick = async () => {
     const action=mode==='coords_address'?'correct mismatched business name and address details, then set coordinates':
       'set coordinates and check address details without editing them';
     if(!confirm(`Process ${pending.length} store(s): ${action}?`)) return;
-    await send('start',{mode,concurrency:Number($('concurrency').value)}); say('Started in parallel background Chrome windows. You can keep working in other windows - this dashboard shows the progress.');
+    await send('start',{mode,concurrency:Number($('concurrency').value),layout:$('layout').value}); say('Started in the selected layout. You can keep working in other windows - this dashboard shows the progress.');
   } catch(e) {fail(e);}
 };
-$('startCheck').onclick = async () => { try { await send('start', { mode: 'check', concurrency:Number($('concurrency').value) }); say('Checking started in parallel background Chrome windows. You can keep working in other windows.'); } catch (e) { fail(e); } };
+$('startCheck').onclick = async () => { try { await send('start', { mode: 'check', concurrency:Number($('concurrency').value),layout:$('layout').value }); say('Checking started in the selected layout. You can keep working in other windows.'); } catch (e) { fail(e); } };
 $('resumeSaved').onclick=async()=>{try {await send('resumeSaved');say('Resuming saved run; checking the previous and interrupted stores first…');}catch(e){fail(e);}};
 $('pause').onclick = () => send('pause').catch(fail);
 $('stop').onclick = () => send($('stop').dataset.action||'stop').catch(fail);

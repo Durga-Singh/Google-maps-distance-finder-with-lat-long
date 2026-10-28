@@ -1,6 +1,6 @@
-importScripts('match.js','runpolicy.js','resume.js','engine.js');
+importScripts('match.js','runpolicy.js','resume.js','tab-workers.js','engine.js');
 // Only the coordinator writes the shared ledger. Engines receive disjoint rows.
-let pool=[], busy=false, writeTail=Promise.resolve(), controlHandler;
+let pool=[], busy=false, writeTail=Promise.resolve(), controlHandler, tabWorkers=null, runLayout='windows';
 const serial=fn=>{const p=writeTail.then(fn);writeTail=p.catch(()=>{});return p;};
 const clone=x=>structuredClone(x);
 const keys=k=>typeof k==='string'?[k]:Array.isArray(k)?k:Object.keys(k||{});
@@ -13,8 +13,8 @@ function partition(rows,count) {
 async function publish() {
   const live=pool.filter(w=>!w.done);
   await chrome.storage.session.set({batchRunning:busy,runSuspended:live.some(w=>w.state.runSuspended),
-    workers:pool.map(w=>({id:w.id,store:w.state.currentStore||'',status:w.state.status||'Opening window…',done:w.done,paused:!!w.state.runSuspended})),
-    status:busy?`${live.length}/${pool.length} workers active. Each window processes its own stores.`:'All workers stopped or finished. Review the per-worker messages and store results; download the combined Excel.'});
+    workers:pool.map(w=>({id:w.id,layout:runLayout,store:w.state.currentStore||'',status:w.state.status||'Opening worker…',done:w.done,paused:!!w.state.runSuspended})),
+    status:busy?`${live.length}/${pool.length} workers active. ${runLayout==='tabs'?'One window; tabs share foreground map/input turns.':'Each window processes its own stores.'}`:'All workers stopped or finished. Review the per-worker messages and store results; download the combined Excel.'});
 }
 function engineChrome(w) {
   const listeners=[];
@@ -42,7 +42,7 @@ function engineChrome(w) {
     async set(v){Object.assign(w.state,clone(v));await chrome.storage.session.set({['workerSession'+w.id]:w.state});await publish();},
     async remove(k){keys(k).forEach(n=>delete w.state[n]);await chrome.storage.session.set({['workerSession'+w.id]:w.state});}
   }:chrome.storage.session;
-  const api={...chrome,storage:{...chrome.storage,local,session},
+  const api={...chrome,workerTabs:w?tabWorkers:null,storage:{...chrome.storage,local,session},
     runtime:{...chrome.runtime,onMessage:{addListener(fn){if(!w) controlHandler=fn;}}},
     action:{onClicked:{addListener(){}}},
     debugger:{...chrome.debugger,onDetach:event(chrome.debugger.onDetach)},
@@ -64,17 +64,20 @@ async function start(message,sender) {
     const saved=message.action==='resumeSaved'?(await chrome.storage.local.get('savedRun')).savedRun:null;
     if(message.action==='resumeSaved' && !saved) throw new Error('No saved run. Start a run first.');
     const mode=saved?saved.mode:message.mode;
+    runLayout=saved?(saved.layout||'windows'):(message.layout||'windows');
+    if(!['tabs','windows'].includes(runLayout)) throw new Error('Choose tabs or windows.');
+    tabWorkers=runLayout==='tabs'?createTabWorkers(chrome):null;
     if(mode!=='check') RunPolicy.options(mode);
     const {batchRows=[]}=await chrome.storage.local.get('batchRows');
     if(!batchRows.length) throw new Error('Load your sheet first.');
     if(!saved && mode!=='check' && batchRows.some(r=>r.detailsReview||['processing','saving','submitted_review'].includes(r.status))) throw new Error('Review interrupted stores using “I reviewed it” before starting.');
-    const requested=Number(message.concurrency??20);
-    if(!Number.isInteger(requested)||requested<1||requested>20) throw new Error('Choose 1 to 20 windows.');
+    const requested=Number(message.concurrency??4);
+    if(!Number.isInteger(requested)||requested<1||requested>20) throw new Error('Choose 1 to 20 workers.');
     if(saved && JSON.stringify(saved.queueKeys)!==JSON.stringify(ResumePlan.keys(batchRows))) throw new Error('Queue changed. Start a new run.');
     const entries=saved?saved.workers.filter(w=>!w.checkpoint?.complete):partition(batchRows,requested).map((indices,i)=>({id:i+1,indices,checkpoint:null}));
     if(!entries.length) throw new Error('The saved run is complete.');
     pool=entries.map(e=>({...e,rows:e.indices.map(n=>clone(batchRows[n])),state:{},done:false,resuming:!!saved}));
-    if(!saved) await chrome.storage.local.set({savedRun:{mode,createdAt:new Date().toISOString(),queueKeys:ResumePlan.keys(batchRows),workers:entries}});
+    if(!saved) await chrome.storage.local.set({savedRun:{mode,layout:runLayout,createdAt:new Date().toISOString(),queueKeys:ResumePlan.keys(batchRows),workers:entries}});
     for(const w of pool) {
       // Retain stopped windows for manual inspection, but never reuse their editor state.
       w.engine=createEngine(engineChrome(w));
@@ -136,4 +139,4 @@ chrome.runtime.onMessage.addListener((m,s,reply)=>{
   return true;
 });
 // A restarted worker never resumes an ambiguous save automatically.
-chrome.storage.session.set({batchRunning:false,runSuspended:false,workers:[],status:'Ready. Use Resume saved run to continue after a browser restart, with a one-store overlap per window.'});
+chrome.storage.session.set({batchRunning:false,runSuspended:false,workers:[],status:'Ready. Use Resume saved run to continue after a browser restart, with a one-store overlap per worker.'});
